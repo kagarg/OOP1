@@ -1,0 +1,32 @@
+# Игнорировать исполняемые файлы
+*.exe
+*.out
+*.app
+
+# Игнорировать объектные файлы
+*.obj
+*.o
+
+# Игнорировать временные файлы Visual Studio
+*.user
+*.suo
+*.cache
+*.sdf
+*.opensdf
+*.opendb
+*.vcxproj.*
+!*.vcxproj.filters
+
+# Папки сборки
+Debug/
+Release/
+x64/
+x86/
+build/
+bin/
+obj/
+
+# Временные файлы
+*.tmp
+*.log
+*.vs/
