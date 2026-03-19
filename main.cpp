@@ -5,6 +5,8 @@
 #include <cmath>
 #include <random>
 #include <stdexcept>
+#include <vector>
+#include <algorithm>
 #define interface struct 
 
 interface IDistribution{ // интерфейс распределения
@@ -15,12 +17,12 @@ interface IDistribution{ // интерфейс распределения
     virtual double asymmetry()const=0;
     virtual double mean()const=0;
     virtual double dispersion()const=0;
-// . . .
+
 };
 interface IPersistent{ // интерфейс персистентного объекта
     virtual void save(std::ofstream& out)const=0;// чисто виртуальные
     virtual void load(std::ifstream& in)=0;// функции
-// . . . 
+
 };
 
 
@@ -210,59 +212,125 @@ public:
 
 
 
+
+//--------------------------------------------------------------------------
+
+
 interface IObserver{virtual void update()=0;}; 
 
-class Empiric {
-// . . .
-// список наблюдателей: пара "объект - интересующее событие"
+class Data {
+    std::vector<double> data; // выборка
+    double min_, max_; // границы выборки
+    // список наблюдателей: пара "объект - интересующее событие"
     std::forward_list<std::pair<IObserver*, int>> observers; 
 public:
-    // . . .
+    Data(const std::vector<double>& data) : data(data) {
+        if (data.empty())
+            throw std::invalid_argument("data is empty");
+        auto [min_it, max_it] = std::minmax_element(data.begin(), data.end());
+        min_ = *min_it;
+        max_ = *max_it;
+    }
+
+    const std::vector<double>& getData() const { return data; }
+    double getMin() const { return min_; }
+    double getMax() const { return max_; }
+    double addDataPoint(double x) {
+        data.push_back(x);
+        if (x < min_) min_ = x;
+        if (x > max_) max_ = x;
+        return x;
+    }   
+    void changeData(int i, double x) {
+        if (i < 0 || i >= data.size())
+            throw std::out_of_range("index out of range");
+        double oldValue = data[i];
+        data[i] = x;
+        if (x < min_) min_ = x;
+        if (x > max_) max_ = x;
+        // return oldValue;
+    }
+    double getDataPoint(int i) const {
+        if (i < 0 || i >= data.size())
+            throw std::out_of_range("index out of range");
+        return data[i];
+    }   
+    std::vector<double> countEmpiric(){
+
+        double mean = [](const std::vector<double>& data) {
+            double sum = 0.0;
+            for (double x : data) sum += x;
+            return sum / data.size();
+        }(data);
+
+        double dispersion = [mean](const std::vector<double>& data) {
+            double sum = 0.0;
+            for (double x : data) sum += (x - mean) * (x - mean);
+            return sum / data.size();
+        }(data);
+
+        double asymmetry = [mean, dispersion](const std::vector<double>& data) {
+            double sum = 0.0;
+            for (double x : data) sum += pow(x - mean, 3);
+            return sum / (data.size() * pow(dispersion, 1.5));
+        }(data);
+
+        double excess = [mean, dispersion](const std::vector<double>& data) {
+            double sum = 0.0;
+            for (double x : data) sum += pow(x - mean, 4);
+            return sum / (data.size() * pow(dispersion, 2)) - 3.0;
+        }(data);
+
+        std::vector<double>result{mean, dispersion, asymmetry, excess};
+
+        return result;
+    }
+
     //добавить наблюдателя
     void attach(IObserver* observer, int interest){
-    observers.push_front(std::pair<IObserver*, int>(observer, interest));
+        observers.push_front(std::pair<IObserver*, int>(observer, interest));
     }
     // удалить наблюдателя
-        void detach(IObserver* observer, int interest){
-    observers.remove(std::pair<IObserver*, int>(observer, interest));
+    void detach(IObserver* observer, int interest){
+        observers.remove(std::pair<IObserver*, int>(observer, interest));
     }
     // уведомить всех наблюдателей, интересующихся событием interest
-        void notify(int interest=1){
-    for (auto& elem : observers) 
-    if(elem.second==interest) elem.first->update();
+    void notify(int interest=1){
+        for (auto& elem : observers) 
+        if(elem.second==interest) elem.first->update();
     }
-    // изменить значение i-го наблюдения на значение x
-    void changeData(int i, float x){
-        //. . . // произвести изменение
-        notify(0); // уведомить всех интересующихся
-    }
+
 };
+
+
 
 //IObserver – замещает функцию update.
 
 class Histogram : public IObserver {
-    Empiric &e;
+    Data &data_;
     //. . .
 public:
-    Histogram(Empiric & em, int k, int interest=0); // k - число столбцов 
+    Histogram(Data & d, int k, int interest=0): data_(d){
+        data_.attach(this, interest);
+    } // k - число столбцов 
                                     // гистограммы
     void update() override{
     // пересчитать гистограмму по измененной выборке
     }
-    //. . .
+
 };
 
 int main(){
-    // Empiric em(. . .); 
-    // // несколько гистограмм разной степени грубости 
-    // Histogram h1(em, 5, 1), h2(em, 10), h3(em, 15);
-    //         //. . .
-    // // последовательное изменение трех элементов
-    // em.changeData(0, 1.2); // обновляются h2 и h3
-    // em.changeData(1, 2.3); // обновляются h2 и h3
-    // em.changeData(2, 3.4); // обновляются h2 и h3
-    // em.notify(); // вызов обновления клиентом, обновляется h1
-    //         //. . .
+    Data data({1.0, 2.0, 3.0, 4.0, 5.0}); 
+    // несколько гистограмм разной степени грубости 
+    Histogram h1(data, 5, 1), h2(data, 10), h3(data, 15);
+            //. . .
+    // последовательное изменение трех элементов
+    data.changeData(0, 1.2); // обновляются h2 и h3
+    data.changeData(1, 2.3); // обновляются h2 и h3
+    data.changeData(2, 3.4); // обновляются h2 и h3
+    data.notify(); // вызов обновления клиентом, обновляется h1
+
     Normal dist(0.0, 1.0);
     std::cout << "Normal distribution:" << std::endl;
     std::cout << "Density at 0: " << dist.density(0.0) << std::endl;
