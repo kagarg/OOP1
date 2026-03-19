@@ -16,7 +16,7 @@
 *.opendb
 *.vcxproj.*
 !*.vcxproj.filters
-
+.vscode/
 # Папки сборки
 Debug/
 Release/
