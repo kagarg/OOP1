@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <iomanip>
 #include <string>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define interface struct
 
@@ -149,7 +152,23 @@ class ShiftedExponentialLaplace : public IDistribution, public IPersistent {
     static double E1(double x) {
         if (x <= 0.0)
             throw std::invalid_argument("E1(x) is defined only for x > 0");
-        return -std::expint(-x);
+
+        // Numerical evaluation of E1(x) = integral from x to inf of exp(-t) / t dt.
+        const double upper = x + 50.0;
+        const int steps = 10000;
+        const double h = (upper - x) / steps;
+
+        auto f = [](double t) {
+            return std::exp(-t) / t;
+        };
+
+        double sum = f(x) + f(upper);
+        for (int i = 1; i < steps; ++i) {
+            double t = x + i * h;
+            sum += (i % 2 == 0 ? 2.0 : 4.0) * f(t);
+        }
+
+        return sum * h / 3.0;
     }
 
     double BaseDispersion() const {
@@ -439,6 +458,7 @@ public:
                       << dens_[i] << "\n";
         }
     }
+
 };
 
 // --------------------------------------------------------------------------
@@ -532,6 +552,25 @@ void observerDemo() {
     std::cout << "h1: " << h1.density(2.5) << "\n";
 }
 
+void saveHistogramData(const std::string& filename,const Histogram& hist,const IDistribution& dist){
+    std::ofstream out(filename);
+    if (!out) throw std::runtime_error("failed to open file for saving histogram data");
+    (void)dist;
+
+    out << "bin_left,bin_right,emp_density\n";
+
+    const std::vector<double>& densities = hist.getDensities();
+    const double left = hist.getLeft();
+    const double step = hist.getStep();
+
+    out << std::fixed << std::setprecision(6);
+    for (int i = 0; i < hist.getBinsCount(); ++i) {
+        double binLeft = left + i * step;
+        double binRight = binLeft + step;
+        out << binLeft << ',' << binRight << ',' << densities[i] << '\n';
+    }
+}
+
 void demoDistribution(const std::string& name,
                       const IDistribution& dist,
                       const std::vector<std::size_t>& sizes,
@@ -548,36 +587,43 @@ void demoDistribution(const std::string& name,
         printCharacteristicsComparison(name + ", n = " + std::to_string(n), data, dist);
 
         // Сравнение плотностей делаем только для не слишком больших выборок
-        if (n <= 200) {
-            Histogram hist(data, binsForHistogram);
+        if (n < 1000) {
+            const int sturgesBins = std::max(1, static_cast<int>(std::ceil(1.0 + std::log2(static_cast<double>(n)))));
+            Histogram hist(data, sturgesBins);
             printDensityComparison("Сравнение плотностей для " + name +
                                    ", n = " + std::to_string(n),
                                    hist, dist, densityPoints);
+            saveHistogramData(name + "_histogram_data_n" + std::to_string(n) + ".csv", hist, dist);
         }
     }
 }
 
 int main() {
     try {
+#ifdef _WIN32
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+#endif
+
         Normal normalDist(0.0, 1.0, 42);
         Uniform uniformDist(-1.0, 3.0, 42);
         ShiftedExponentialLaplace selDist(0.5, 1.2, 2.0, 42);
 
         // 6.1, 6.2, 6.3
         demoDistribution("Normal(0,1)",
-                         normalDist,
-                         {50, 5000, 1000000},
-                         {-2.0, -1.0, 0.0, 1.0, 2.0});
+                        normalDist,
+                        {50, 500, 5000, 1000000},
+                        {-2.0, -1.0, 0.0, 1.0, 2.0});
 
         demoDistribution("Uniform(-1,3)",
-                         uniformDist,
-                         {40, 3000, 1000000},
-                         {-1.0, 0.0, 1.0, 2.0, 3.0});
+                        uniformDist,
+                        {50, 500, 5000, 1000000},
+                        {-1.0, 0.0, 1.0, 2.0, 3.0});
 
         demoDistribution("ShiftedExponentialLaplace(shift=0.5, scale=1.2, form=2.0)",
-                         selDist,
-                         {60, 4000, 1000000},
-                         {-1.0, 0.0, 0.5, 1.0, 2.0});
+                        selDist,
+                        {50, 500, 5000, 1000000},
+                        {-1.0, 0.0, 0.5, 1.0, 2.0});
 
         // 6.4
         observerDemo();
