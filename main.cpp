@@ -15,6 +15,13 @@
 #define interface struct
 
 interface IDistribution { // интерфейс распределения
+protected:
+    mutable std::mt19937 gen_;
+
+public:
+    explicit IDistribution(uint32_t seed = std::random_device{}())
+        : gen_(seed) {}
+
     virtual ~IDistribution() = default;
     virtual double density(double x) const = 0;
     virtual double randNum() const = 0;
@@ -30,11 +37,10 @@ interface IPersistent { // интерфейс персистентного об�
 };
 
 class Normal : public IDistribution, public IPersistent {
-    double mu_, sigma_;
-    mutable std::mt19937 gen_;
+    double mu_, sigma_; // мат. ожидание и стандартное отклонение(shift и scale для нормального распределения соответственно)
 public:
     Normal(double mu, double sigma, uint32_t seed = std::random_device{}())
-        : mu_(mu), sigma_(sigma), gen_(seed) {
+        : IDistribution(seed), mu_(mu), sigma_(sigma) {
         if (sigma_ <= 0.0)
             throw std::invalid_argument("sigma must be > 0");
     }
@@ -71,21 +77,13 @@ public:
         sigma_ = sigma;
     }
 
-    void setMu(double mu) { mu_ = mu; }
-
-    void setSigma(double sigma) {
-        if (sigma <= 0.0)
-            throw std::invalid_argument("sigma must be > 0");
-        sigma_ = sigma;
-    }
 };
 
 class Uniform : public IDistribution, public IPersistent {
-    double a_, b_;
-    mutable std::mt19937 gen_;
+    double a_, b_;// X = a_  + (b_ - a_) * U, где U ~ U(0,1) , где a_ = shift, b_ - a_ = scale для равномерного распределения соответственно 
 public:
     Uniform(double a, double b, uint32_t seed = std::random_device{}())
-        : a_(a), b_(b), gen_(seed) {
+        : IDistribution(seed), a_(a), b_(b) {
         if (b_ <= a_)
             throw std::invalid_argument("must be b > a");
     }
@@ -126,22 +124,10 @@ public:
         b_ = b;
     }
 
-    void setA(double a) {
-        if (b_ <= a)
-            throw std::invalid_argument("must be b > a");
-        a_ = a;
-    }
-
-    void setB(double b) {
-        if (b <= a_)
-            throw std::invalid_argument("must be b > a");
-        b_ = b;
-    }
 };
 
 class ShiftedExponentialLaplace : public IDistribution, public IPersistent {
     double shift_, scale_, form_;
-    mutable std::mt19937 gen_;
 
     double BaseDensity(double x) const {
         return (form_ * (form_ + 1 + std::abs(x))) /
@@ -180,7 +166,7 @@ class ShiftedExponentialLaplace : public IDistribution, public IPersistent {
 public:
     ShiftedExponentialLaplace(double shift, double scale, double form,
                               uint32_t seed = std::random_device{}())
-        : shift_(shift), scale_(scale), form_(form), gen_(seed) {
+        : IDistribution(seed), shift_(shift), scale_(scale), form_(form) {
         if (scale <= 0.0)
             throw std::invalid_argument("scale must be > 0");
         if (form <= 0.0)
@@ -242,19 +228,6 @@ public:
         form_ = form;
     }
 
-    void setShift(double shift) { shift_ = shift; }
-
-    void setScale(double scale) {
-        if (scale <= 0.0)
-            throw std::invalid_argument("scale must be > 0");
-        scale_ = scale;
-    }
-
-    void setForm(double form) {
-        if (form <= 0.0)
-            throw std::invalid_argument("form must be > 0");
-        form_ = form;
-    }
 };
 
 // --------------------------------------------------------------------------
@@ -288,6 +261,13 @@ public:
     std::size_t size() const { return data.size(); }
 
     double addDataPoint(double x) {
+        if (data.empty()) {
+            data.push_back(x);
+            min_ = max_ = x;
+            notify(0);
+            return x;
+        }
+
         data.push_back(x);
         if (x < min_) min_ = x;
         if (x > max_) max_ = x;
@@ -309,13 +289,27 @@ public:
         notify(0); // автоматическое уведомление
     }
 
-    double getDataPoint(int i) const {
+    void deleteDataPoint(int i) {
         if (i < 0 || i >= static_cast<int>(data.size()))
             throw std::out_of_range("index out of range");
-        return data[i];
+
+        double oldValue = data[i];
+        data.erase(data.begin() + i);
+
+        if (data.empty()) {
+            min_ = max_ = 0.0;
+        }
+        else if (oldValue == min_ || oldValue == max_) {
+            recomputeMinMax();
+        }
+
+        notify(0);
     }
 
     std::vector<double> countEmpiric() const {
+        if (data.empty())
+            throw std::runtime_error("cannot compute empirical characteristics for empty data");
+
         double mean = [this]() {
             double sum = 0.0;
             for (double x : data) sum += x;
@@ -608,6 +602,25 @@ int main() {
         Normal normalDist(0.0, 1.0, 42);
         Uniform uniformDist(-1.0, 3.0, 42);
         ShiftedExponentialLaplace selDist(0.5, 1.2, 2.0, 42);
+
+        {
+            std::ofstream out("normal_distribution_params.txt");
+            if (!out)
+                throw std::runtime_error("failed to open file for Normal params");
+            normalDist.save(out);
+        }
+        {
+            std::ofstream out("uniform_distribution_params.txt");
+            if (!out)
+                throw std::runtime_error("failed to open file for Uniform params");
+            uniformDist.save(out);
+        }
+        {
+            std::ofstream out("shifted_exponential_laplace_distribution_params.txt");
+            if (!out)
+                throw std::runtime_error("failed to open file for ShiftedExponentialLaplace params");
+            selDist.save(out);
+        }
 
         // 6.1, 6.2, 6.3
         demoDistribution("Normal(0,1)",
