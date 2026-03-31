@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <string>
+#include <limits>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -126,51 +127,58 @@ public:
 
 };
 
-class ShiftedExponentialLaplace : public IDistribution, public IPersistent {
+class ShiftedUniformGeneralizedGaussian : public IDistribution, public IPersistent {
     double shift_, scale_, form_;
 
-    double BaseDensity(double x) const {
-        return (form_ * (form_ + 1 + std::abs(x))) /
-               (2.0 * std::pow((form_ + std::abs(x)), 2.0)) *
-               std::exp(-std::abs(x));
-    }
-
-    static double E1(double x) {
+    static double LowerIncompleteGammaTwoThirds(double x) {
         if (x <= 0.0)
-            throw std::invalid_argument("E1(x) is defined only for x > 0");
+            return 0.0;
 
-        // Numerical evaluation of E1(x) = integral from x to inf of exp(-t) / t dt.
-        const double upper = x + 50.0;
-        const int steps = 10000;
-        const double h = (upper - x) / steps;
+        const double upper = std::cbrt(x);
+        const int steps = 2000; // число шагов для численного интегрирования (методом Симпсона)
+        const double h = upper / steps;
 
-        auto f = [](double t) {
-            return std::exp(-t) / t;
+        auto integrand = [](double u) {
+            return 3.0 * u * std::exp(-u * u * u);
         };
 
-        double sum = f(x) + f(upper);
+        double sum = integrand(0.0) + integrand(upper);
         for (int i = 1; i < steps; ++i) {
-            double t = x + i * h;
-            sum += (i % 2 == 0 ? 2.0 : 4.0) * f(t);
+            const double u = h * i;
+            sum += (i % 2 == 0 ? 2.0 : 4.0) * integrand(u);
         }
 
         return sum * h / 3.0;
     }
 
-    double BaseDispersion() const {
-        double e1 = E1(form_);
-        double var = 1.0 - form_ * std::exp(form_) * e1;
-        return 2 * form_ * var;
+    double BaseDensity(double x) const {
+        const double gamma13 = std::tgamma(1.0 / 3.0);
+        const double absX = std::abs(x);
+
+        if (form_ == 0.0) {
+            return 3.0 * std::exp(-std::pow(absX, 3.0)) / (2.0 * gamma13);
+        }
+
+        if (absX == 0.0) {
+            return 3.0 * (2.0 - form_) / (4.0 * gamma13);
+        }
+
+        const double xCube = std::pow(absX, 3.0);
+        const double lower = std::pow((1.0 - form_) * absX, 3.0);
+        const double numerator = LowerIncompleteGammaTwoThirds(xCube) -
+                                 LowerIncompleteGammaTwoThirds(lower);
+
+        return numerator / (2.0 * gamma13 * form_ * absX * absX);
     }
 
 public:
-    ShiftedExponentialLaplace(double shift, double scale, double form,
-                              uint32_t seed = std::random_device{}())
+    ShiftedUniformGeneralizedGaussian(double shift, double scale, double form,
+                                      uint32_t seed = std::random_device{}())
         : IDistribution(seed), shift_(shift), scale_(scale), form_(form) {
         if (scale <= 0.0)
             throw std::invalid_argument("scale must be > 0");
-        if (form <= 0.0)
-            throw std::invalid_argument("form must be > 0");
+        if (form < 0.0 || form > 1.0)
+            throw std::invalid_argument("form must be in [0, 1]");
     }
 
     double density(double x) const override {
@@ -178,15 +186,15 @@ public:
     }
 
     double randNum() const override {
-        std::exponential_distribution<double> exp1(1.0);
-        std::exponential_distribution<double> expForm(form_);
+        std::gamma_distribution<double> gammaDist(1.0 / 3.0, 1.0);
         std::bernoulli_distribution bern(0.5);
+        std::uniform_real_distribution<double> uniformDist(1.0 - form_, 1.0);
 
-        double e = exp1(gen_);
-        double t = expForm(gen_);
-        int b = bern(gen_) ? 1 : 0;
+        const double g = gammaDist(gen_);
+        const double u = uniformDist(gen_);
+        const double sign = bern(gen_) ? 1.0 : -1.0;
 
-        double x0 = e * (2 * b - 1) / (t + 1.0);
+        const double x0 = sign * std::cbrt(g) / u;
         return shift_ + scale_ * x0;
     }
 
@@ -195,7 +203,10 @@ public:
     }
 
     double dispersion() const override {
-        return scale_ * scale_ * BaseDispersion();
+        if (form_ >= 1.0)
+            return std::numeric_limits<double>::infinity();
+
+        return scale_ * scale_ / ((1.0 - form_) * std::tgamma(1.0 / 3.0));
     }
 
     double asymmetry() const override {
@@ -203,10 +214,13 @@ public:
     }
 
     double excess() const override {
-        double e1 = E1(form_);
-        double var = 1.0 - form_ * std::exp(form_) * e1;
-        return (std::pow(form_, 2) * var - form_ + 2.0) /
-               (form_ * std::pow(var, 2)) - 3.0;
+        if (form_ >= 1.0)
+            return std::numeric_limits<double>::infinity();
+
+        const double gamma13 = std::tgamma(1.0 / 3.0);
+        const double gamma53 = std::tgamma(5.0 / 3.0);
+        return (1.0 + (form_ * form_) / (3.0 * (1.0 - form_))) *
+               gamma53 * gamma13 - 3.0;
     }
 
     void save(std::ofstream& stream) const override {
@@ -217,11 +231,11 @@ public:
         double shift, scale, form;
         stream >> shift >> scale >> form;
         if (!stream)
-            throw std::runtime_error("failed to load ShiftedExponentialLaplace");
+            throw std::runtime_error("failed to load ShiftedUniformGeneralizedGaussian");
         if (scale <= 0.0)
             throw std::invalid_argument("scale must be > 0");
-        if (form <= 0.0)
-            throw std::invalid_argument("form must be > 0");
+        if (form < 0.0 || form > 1.0)
+            throw std::invalid_argument("form must be in [0, 1]");
 
         shift_ = shift;
         scale_ = scale;
@@ -508,6 +522,29 @@ void printDensityComparison(const std::string& title,
     }
 }
 
+void printUGGReferenceTable() {
+    const std::vector<double> formValues = {0.0, 0.1, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9};
+
+    std::cout << "\n================ U-GG: табличные значения ================\n";
+    std::cout << "Сравнение сдвиг-масштабной формы при shift = 0, scale = 1\n";
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << std::setw(8) << "v"
+              << std::setw(12) << "sigma^2"
+              << std::setw(12) << "gamma_2"
+              << std::setw(12) << "f(0)"
+              << std::setw(12) << "f(1)" << "\n";
+
+    for (double v : formValues) {
+        ShiftedUniformGeneralizedGaussian dist(0.0, 1.0, v, 42);
+
+        std::cout << std::setw(8) << v
+                  << std::setw(12) << dist.dispersion()
+                  << std::setw(12) << dist.excess()
+                  << std::setw(12) << dist.density(0.0)
+                  << std::setw(12) << dist.density(1.0) << "\n";
+    }
+}
+
 void observerDemo() {
     std::cout << "\n============== ДЕМОНСТРАЦИЯ НАБЛЮДАТЕЛЯ ==============\n";
 
@@ -601,7 +638,7 @@ int main() {
 
         Normal normalDist(0.0, 1.0, 42);
         Uniform uniformDist(-1.0, 3.0, 42);
-        ShiftedExponentialLaplace selDist(0.5, 1.2, 2.0, 42);
+        ShiftedUniformGeneralizedGaussian uggDist(0.5, 1.2, 0.5, 42);
 
         {
             std::ofstream out("normal_distribution_params.txt");
@@ -616,11 +653,13 @@ int main() {
             uniformDist.save(out);
         }
         {
-            std::ofstream out("shifted_exponential_laplace_distribution_params.txt");
+            std::ofstream out("shifted_ugg_distribution_params.txt");
             if (!out)
-                throw std::runtime_error("failed to open file for ShiftedExponentialLaplace params");
-            selDist.save(out);
+                throw std::runtime_error("failed to open file for ShiftedUniformGeneralizedGaussian params");
+            uggDist.save(out);
         }
+
+        printUGGReferenceTable();
 
         // 6.1, 6.2, 6.3
         demoDistribution("Normal(0,1)",
@@ -633,8 +672,8 @@ int main() {
                         {50, 500, 5000, 1000000},
                         {-1.0, 0.0, 1.0, 2.0, 3.0});
 
-        demoDistribution("ShiftedExponentialLaplace(shift=0.5, scale=1.2, form=2.0)",
-                        selDist,
+        demoDistribution("ShiftedUGG(shift=0.5, scale=1.2, form=0.5)",
+                        uggDist,
                         {50, 500, 5000, 1000000},
                         {-1.0, 0.0, 0.5, 1.0, 2.0});
 
