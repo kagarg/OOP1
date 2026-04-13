@@ -1,5 +1,4 @@
 from pathlib import Path
-import math
 import re
 
 import matplotlib.pyplot as plt
@@ -13,55 +12,6 @@ plt.rcParams["font.size"] = 12
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.alpha"] = 0.35
 
-
-def lower_incomplete_gamma_two_thirds(x, steps=2000):
-    if x <= 0.0:
-        return 0.0
-
-    upper = x ** (1.0 / 3.0)
-    h = upper / steps
-
-    def integrand(u):
-        return 3.0 * u * math.exp(-(u ** 3))
-
-    total = integrand(0.0) + integrand(upper)
-    for i in range(1, steps):
-        u = i * h
-        total += (4.0 if i % 2 else 2.0) * integrand(u)
-
-    return total * h / 3.0
-
-
-def ugg_density_scalar(x, shift, scale, form):
-    z = (x - shift) / scale
-    gamma13 = math.gamma(1.0 / 3.0)
-    abs_z = abs(z)
-
-    if form == 0.0:
-        base = 3.0 * math.exp(-(abs_z ** 3.0)) / (2.0 * gamma13)
-    elif abs_z == 0.0:
-        base = 3.0 * (2.0 - form) / (4.0 * gamma13)
-    else:
-        x_cube = abs_z ** 3.0
-        lower = ((1.0 - form) * abs_z) ** 3.0
-        numerator = lower_incomplete_gamma_two_thirds(x_cube) - lower_incomplete_gamma_two_thirds(lower)
-        base = numerator / (2.0 * gamma13 * form * abs_z * abs_z)
-
-    return base / scale
-
-
-def normal_density(x, mu, sigma):
-    return (1.0 / (sigma * math.sqrt(2.0 * math.pi))) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
-
-
-def uniform_density(x, a, b):
-    return np.where((x >= a) & (x <= b), 1.0 / (b - a), 0.0)
-
-
-def ugg_density(x, shift, scale, form):
-    return np.array([ugg_density_scalar(value, shift, scale, form) for value in x])
-
-
 def load_histogram(path):
     data = pd.read_csv(path)
     data["center"] = (data["bin_left"] + data["bin_right"]) / 2.0
@@ -69,24 +19,8 @@ def load_histogram(path):
     return data
 
 
-def load_params(path):
-    return [float(value) for value in path.read_text(encoding="utf-8").split()]
-
-
-def build_theoretical_density(distribution_name, x):
-    if distribution_name == "Normal":
-        mu, sigma = load_params(Path("normal_distribution_params.txt"))
-        return normal_density(x, mu, sigma)
-
-    if distribution_name == "Uniform":
-        a, b = load_params(Path("uniform_distribution_params.txt"))
-        return uniform_density(x, a, b)
-
-    if distribution_name == "ShiftedUGG":
-        shift, scale, form = load_params(Path("shifted_ugg_distribution_params.txt"))
-        return ugg_density(x, shift, scale, form)
-
-    raise ValueError(f"Unknown distribution: {distribution_name}")
+def load_theory_curve(path):
+    return pd.read_csv(path)
 
 
 def parse_distribution_info(path):
@@ -115,19 +49,23 @@ def build_empirical_points(data, points_per_bin):
     return np.concatenate(x_parts), np.concatenate(y_parts)
 
 
+def build_theory_curve_path(histogram_path):
+    return histogram_path.with_name(histogram_path.name.replace("_histogram_data_", "_theory_curve_"))
+
+
 def plot_distribution_panel(ax, path):
     distribution_name, title_name, sample_size = parse_distribution_info(path)
     if distribution_name is None:
         return
 
     data = load_histogram(path)
-    x_min = data["bin_left"].min()
-    x_max = data["bin_right"].max()
-    span = x_max - x_min
-    padding = 0.25 * span if span > 0.0 else 1.0
+    theory_path = build_theory_curve_path(path)
+    if not theory_path.exists():
+        raise FileNotFoundError(f"Теоретические точки не найдены: {theory_path}")
 
-    curve_x = np.linspace(x_min - padding, x_max + padding, 500)
-    curve_y = build_theoretical_density(distribution_name, curve_x)
+    theory_data = load_theory_curve(theory_path)
+    curve_x = theory_data["x"].to_numpy()
+    curve_y = theory_data["theory_density"].to_numpy()
 
     theory_point_count = 120 if sample_size >= 500 else 70
     theory_idx = np.linspace(0, len(curve_x) - 1, theory_point_count, dtype=int)
@@ -178,8 +116,6 @@ def main():
 
     grouped = {}
     for path in csv_files:
-        if path.stem.startswith("ShiftedExponentialLaplace"):
-            continue
 
         distribution_name, _, _ = parse_distribution_info(path)
         if distribution_name is None:

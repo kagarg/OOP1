@@ -583,10 +583,9 @@ void observerDemo() {
     std::cout << "h1: " << h1.density(2.5) << "\n";
 }
 
-void saveHistogramData(const std::string& filename,const Histogram& hist,const IDistribution& dist){
+void saveHistogramData(const std::string& filename, const Histogram& hist) {
     std::ofstream out(filename);
     if (!out) throw std::runtime_error("failed to open file for saving histogram data");
-    (void)dist;
 
     out << "bin_left,bin_right,emp_density\n";
 
@@ -599,6 +598,30 @@ void saveHistogramData(const std::string& filename,const Histogram& hist,const I
         double binLeft = left + i * step;
         double binRight = binLeft + step;
         out << binLeft << ',' << binRight << ',' << densities[i] << '\n';
+    }
+}
+
+void saveTheoreticalCurveData(const std::string& filename,
+                              const Histogram& hist,
+                              const IDistribution& dist,
+                              int pointCount = 500) {
+    std::ofstream out(filename);
+    if (!out) throw std::runtime_error("failed to open file for saving theoretical curve data");
+
+    const double xMin = hist.getLeft();
+    const double xMax = hist.getLeft() + hist.getStep() * hist.getBinsCount();
+    const double span = xMax - xMin;
+    const double padding = span > 0.0 ? 0.25 * span : 1.0;
+    const double curveLeft = xMin - padding;
+    const double curveRight = xMax + padding;
+    const int safePointCount = std::max(2, pointCount);
+    const double step = (curveRight - curveLeft) / static_cast<double>(safePointCount - 1);
+
+    out << "x,theory_density\n";
+    out << std::fixed << std::setprecision(6);
+    for (int i = 0; i < safePointCount; ++i) {
+        const double x = curveLeft + step * i;
+        out << x << ',' << dist.density(x) << '\n';
     }
 }
 
@@ -624,7 +647,9 @@ void demoDistribution(const std::string& name,
             printDensityComparison("Сравнение плотностей для " + name +
                                    ", n = " + std::to_string(n),
                                    hist, dist, densityPoints);
-            saveHistogramData(name + "_histogram_data_n" + std::to_string(n) + ".csv", hist, dist);
+            const std::string sampleSuffix = "_n" + std::to_string(n) + ".csv";
+            saveHistogramData(name + "_histogram_data" + sampleSuffix, hist);
+            saveTheoreticalCurveData(name + "_theory_curve" + sampleSuffix, hist, dist);
         }
     }
 }
